@@ -141,6 +141,7 @@ import { ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 import { bookApi } from '../api/book'
 
 const route = useRoute()
@@ -148,13 +149,30 @@ const router = useRouter()
 const message = useMessage()
 
 const slug = route.params.slug as string
-const chapterId = computed(() => parseInt(route.params.id as string, 10))
+const chapterId = computed(() => {
+  const id = Number(route.params.id as string)
+  if (isNaN(id) || id <= 0) {
+    message.error('无效的章节ID')
+    return null
+  }
+  return id
+})
+
+const goHome = () => {
+  router.push(`/book/${slug}/workbench`)
+}
+
+watch(chapterId, (newId) => {
+  if (newId === null) {
+    goHome()
+  }
+}, { immediate: true })
 
 const content = ref('')
 const saving = ref(false)
 const saveStatus = ref<'unsaved' | 'saving' | 'saved'>('saved')
 const lastSaveTime = ref('')
-let saveTimer: number | null = null
+const saveTimer = ref<ReturnType<typeof setTimeout> | null>(null)
 
 const reviewStatus = ref('pending')
 const reviewMemo = ref('')
@@ -175,7 +193,15 @@ const paragraphCount = computed(() =>
   content.value ? content.value.split(/\n\s*\n/).filter(p => p.trim()).length : 0
 )
 
-const previewHtml = computed(() => marked.parse(content.value || '', { breaks: true, async: false }) as string)
+const cachedPreviewHtml = ref<string>('')
+const previewHtml = computed(() => {
+  if (!content.value) return cachedPreviewHtml.value
+
+  const html = marked.parse(content.value, { breaks: true, async: false }) as string
+  const sanitizedHtml = DOMPurify.sanitize(html)
+  cachedPreviewHtml.value = sanitizedHtml
+  return sanitizedHtml
+})
 
 const saveStatusText = computed(() => {
   const map = { unsaved: '未保存', saving: '保存中…', saved: '已保存' }
@@ -184,13 +210,17 @@ const saveStatusText = computed(() => {
 
 const contentDirty = computed(() => saveStatus.value === 'unsaved')
 
+const currentChapterIndex = computed(() => {
+  return chapterIds.value.indexOf(chapterId.value)
+})
+
 const canPrev = computed(() => {
-  const i = chapterIds.value.indexOf(chapterId.value)
+  const i = currentChapterIndex.value
   return i > 0
 })
 
 const canNext = computed(() => {
-  const i = chapterIds.value.indexOf(chapterId.value)
+  const i = currentChapterIndex.value
   return i >= 0 && i < chapterIds.value.length - 1
 })
 
@@ -217,8 +247,8 @@ const handleToolSelect = (key: string) => {
 
 const onInput = () => {
   saveStatus.value = 'unsaved'
-  if (saveTimer) clearTimeout(saveTimer)
-  saveTimer = window.setTimeout(() => {
+  if (saveTimer.value) clearTimeout(saveTimer.value)
+  saveTimer.value = window.setTimeout(() => {
     void saveContent()
   }, 30000)
 }
@@ -234,9 +264,10 @@ const saveContent = async () => {
     lastSaveTime.value = new Date().toLocaleTimeString('zh-CN', { hour12: false })
     updateTime.value = new Date().toLocaleString('zh-CN', { hour12: false })
     message.success('已保存')
-  } catch {
+  } catch (error) {
+    console.error('Failed to save content:', error)
     saveStatus.value = 'unsaved'
-    message.error('保存失败')
+    message.error('保存失败，请稍后重试')
   } finally {
     saving.value = false
   }
@@ -247,8 +278,9 @@ const saveReview = async () => {
   try {
     await bookApi.saveChapterReview(slug, chapterId.value, reviewStatus.value, reviewMemo.value)
     message.success('审定已保存')
-  } catch {
-    message.error('保存失败')
+  } catch (error) {
+    console.error('Failed to save review:', error)
+    message.error('保存失败，请稍后重试')
   } finally {
     savingReview.value = false
   }
@@ -277,12 +309,12 @@ const goCastGraph = () => {
 }
 
 const prevChapter = () => {
-  const i = chapterIds.value.indexOf(chapterId.value)
+  const i = currentChapterIndex.value
   if (i > 0) router.push(`/book/${slug}/chapter/${chapterIds.value[i - 1]}`)
 }
 
 const nextChapter = () => {
-  const i = chapterIds.value.indexOf(chapterId.value)
+  const i = currentChapterIndex.value
   if (i >= 0 && i < chapterIds.value.length - 1) {
     router.push(`/book/${slug}/chapter/${chapterIds.value[i + 1]}`)
   }
@@ -297,6 +329,9 @@ const onKeySave = (e: KeyboardEvent) => {
 
 const loadChapter = async () => {
   const cid = chapterId.value
+  if (cid === null) {
+    return
+  }
 
   // Parallel execution of independent API calls
   const [desk, body, rev, structureResult] = await Promise.allSettled([
@@ -309,6 +344,8 @@ const loadChapter = async () => {
   // Handle desk API result
   if (desk.status === 'fulfilled') {
     chapterIds.value = desk.value.chapters.map(c => c.id).sort((a, b) => a - b)
+  } else {
+    console.error('Failed to load desk:', desk.reason)
   }
 
   // Handle body API result
@@ -318,6 +355,8 @@ const loadChapter = async () => {
       createTime.value = new Date().toLocaleString('zh-CN', { hour12: false })
       updateTime.value = createTime.value
     }
+  } else {
+    console.error('Failed to load chapter body:', body.reason)
   }
 
   // Handle review API result
@@ -333,6 +372,7 @@ const loadChapter = async () => {
       storage_dir: structureResult.value.storage_dir ?? null,
     }
   } else {
+    console.warn('Failed to load chapter structure:', structureResult.reason)
     chapterStructure.value = null
   }
 
@@ -343,14 +383,15 @@ watch(
   () => route.params.id,
   async () => {
     if (route.name !== 'Chapter') return
-    if (saveTimer) {
-      clearTimeout(saveTimer)
-      saveTimer = null
+    if (saveTimer.value) {
+      clearTimeout(saveTimer.value)
+      saveTimer.value = null
     }
     pageLoading.value = true
     try {
       await loadChapter()
-    } catch {
+    } catch (error) {
+      console.error('Failed to load chapter:', error)
       message.error('加载章节失败')
     } finally {
       pageLoading.value = false
@@ -362,7 +403,8 @@ onMounted(async () => {
   window.addEventListener('keydown', onKeySave)
   try {
     await loadChapter()
-  } catch {
+  } catch (error) {
+    console.error('Failed to load chapter:', error)
     message.error('加载章节失败')
   } finally {
     pageLoading.value = false
@@ -371,7 +413,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   window.removeEventListener('keydown', onKeySave)
-  if (saveTimer) clearTimeout(saveTimer)
+  if (saveTimer.value) clearTimeout(saveTimer.value)
 })
 </script>
 
