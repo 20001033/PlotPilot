@@ -9,6 +9,8 @@ from domain.novel.value_objects.foreshadowing import (
     ForeshadowingStatus,
     ImportanceLevel
 )
+from domain.novel.value_objects.novel_event import NovelEvent, EventType
+from domain.novel.value_objects.event_timeline import EventTimeline
 
 __all__ = [
     "ChapterContent",
@@ -21,4 +23,7 @@ __all__ = [
     "Foreshadowing",
     "ForeshadowingStatus",
     "ImportanceLevel",
+    "NovelEvent",
+    "EventType",
+    "EventTimeline",
 ]
