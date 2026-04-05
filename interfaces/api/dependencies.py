@@ -519,6 +519,31 @@ def get_beat_sheet_service():
     )
 
 
+def get_scene_generation_service():
+    """获取场景生成服务
+
+    Returns:
+        SceneGenerationService 实例
+    """
+    from application.services.scene_generation_service import SceneGenerationService
+
+    settings = _anthropic_settings(require_key=False)
+    if settings:
+        llm_service = AnthropicProvider(settings)
+        logger.info("Using AnthropicProvider for scene generation")
+    else:
+        from infrastructure.ai.providers.mock_provider import MockProvider
+        llm_service = MockProvider()
+        logger.warning("No API key found, using MockProvider for scene generation")
+
+    return SceneGenerationService(
+        llm_service=llm_service,
+        scene_director=get_scene_director_service(),
+        vector_store=get_vector_store(),
+        embedding_service=get_embedding_service()
+    )
+
+
 def get_scene_director_service() -> "SceneDirectorService":
     """获取场景导演服务
 
