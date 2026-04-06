@@ -14,6 +14,9 @@ from interfaces.api.dependencies import get_novel_repository, get_chapter_reposi
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/autopilot", tags=["autopilot"])
 
+# 与 AutopilotDaemon 中单本挂起阈值一致；守护进程内另有全局 CircuitBreaker（独立进程，API 不可见）
+PER_NOVEL_FAILURE_THRESHOLD = 3
+
 
 class StartRequest(BaseModel):
     max_auto_chapters: Optional[int] = 50  # 本次托管最大章节数
@@ -112,6 +115,51 @@ async def get_autopilot_status(novel_id: str):
         "progress_pct": round(len(completed) / novel.target_chapters * 100, 1) if novel.target_chapters else 0,
         "needs_review": novel.current_stage.value == "paused_for_review",
     }
+
+
+@router.get("/{novel_id}/circuit-breaker")
+async def get_circuit_breaker(novel_id: str):
+    """
+    熔断面板数据：基于小说落库的连续失败计数与自动驾驶状态。
+    （守护进程内的全局熔断器无法跨进程读取，此处不反映 API 级熔断。）
+    """
+    repo = get_novel_repository()
+    novel = repo.get_by_id(NovelId(novel_id))
+    if not novel:
+        raise HTTPException(404, "小说不存在")
+
+    error_count = getattr(novel, "consecutive_error_count", 0) or 0
+    ap = novel.autopilot_status
+
+    if ap == AutopilotStatus.ERROR:
+        breaker_status = "open"
+    elif ap == AutopilotStatus.RUNNING and 0 < error_count < PER_NOVEL_FAILURE_THRESHOLD:
+        breaker_status = "half_open"
+    else:
+        breaker_status = "closed"
+
+    return {
+        "status": breaker_status,
+        "error_count": error_count,
+        "max_errors": PER_NOVEL_FAILURE_THRESHOLD,
+        "last_error": None,
+        "error_history": [],
+    }
+
+
+@router.post("/{novel_id}/circuit-breaker/reset")
+async def reset_circuit_breaker(novel_id: str):
+    """清零连续失败计数；若因错误挂起则切回停止，需用户重新启动自动驾驶。"""
+    repo = get_novel_repository()
+    novel = repo.get_by_id(NovelId(novel_id))
+    if not novel:
+        raise HTTPException(404, "小说不存在")
+
+    novel.consecutive_error_count = 0
+    if novel.autopilot_status == AutopilotStatus.ERROR:
+        novel.autopilot_status = AutopilotStatus.STOPPED
+    repo.save(novel)
+    return {"success": True, "message": "熔断计数已清零"}
 
 
 @router.get("/{novel_id}/stream")

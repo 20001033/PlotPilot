@@ -53,6 +53,21 @@ def test_autopilot_stream_endpoint_exists():
     assert response.status_code in [200, 404]
 
 
+def test_autopilot_circuit_breaker_endpoint():
+    """熔断器状态/重置路由存在且返回约定字段"""
+    r = client.get("/api/v1/autopilot/test-novel/circuit-breaker")
+    assert r.status_code in [200, 404]
+    if r.status_code == 200:
+        data = r.json()
+        assert data["status"] in ("closed", "open", "half_open")
+        assert "error_count" in data
+        assert "max_errors" in data
+        assert data["error_history"] == []
+
+    r2 = client.post("/api/v1/autopilot/test-novel/circuit-breaker/reset")
+    assert r2.status_code in [200, 404]
+
+
 def test_character_anchor_endpoint():
     """测试角色锚点端点"""
     response = client.get("/api/v1/novels/test-novel/sandbox/character/char-001/anchor")
