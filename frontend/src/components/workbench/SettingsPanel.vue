@@ -35,7 +35,7 @@
       </n-tab-pane>
     </n-tabs>
 
-    <!-- 叙事脉络：故事线 / 情节弧 / 剧情时间轴 / 版本快照(占位) / 宏观诊断 -->
+    <!-- 叙事脉络：故事线·弧光 / 全息编年史（剧情×快照双螺旋）/ 宏观诊断 -->
     <n-tabs
       v-if="activeGroup === 'narrative'"
       v-model:value="narrativeTab"
@@ -44,24 +44,18 @@
       class="settings-tabs"
       :tabs-padding="8"
     >
-      <n-tab-pane name="storylines" tab="故事线">
-        <StorylinePanel :slug="slug" />
+      <n-tab-pane name="storyline-arc" tab="故事线·弧光">
+        <StorylinePlotOverviewPanel :slug="slug" />
       </n-tab-pane>
-      <n-tab-pane name="plot-arc" tab="情节弧">
-        <PlotArcPanel :slug="slug" />
-      </n-tab-pane>
-      <n-tab-pane name="timeline" tab="剧情时间轴">
-        <TimelinePanel :slug="slug" />
-      </n-tab-pane>
-      <n-tab-pane name="snapshots" tab="版本快照">
-        <SnapshotPlaceholderPanel :slug="slug" />
+      <n-tab-pane name="chronicles" tab="全息编年史">
+        <HolographicChroniclesPanel :slug="slug" />
       </n-tab-pane>
       <n-tab-pane name="macro-refactor" tab="宏观诊断">
         <MacroRefactorPanel :slug="slug" />
       </n-tab-pane>
     </n-tabs>
 
-    <!-- 片场：对话沙盒 / 本章建议(占位) / 伏笔账本 -->
+    <!-- 片场：对话沙盒 / 本章建议 / 伏笔账本 -->
     <n-tabs
       v-if="activeGroup === 'tactical'"
       v-model:value="tacticalTab"
@@ -91,27 +85,33 @@ import { ref, watch } from 'vue'
 import BiblePanel from '../panels/BiblePanel.vue'
 import KnowledgePanel from '../knowledge/KnowledgePanel.vue'
 import WorldbuildingPanel from './WorldbuildingPanel.vue'
-import StorylinePanel from './StorylinePanel.vue'
-import PlotArcPanel from './PlotArcPanel.vue'
-import TimelinePanel from './TimelinePanel.vue'
+import StorylinePlotOverviewPanel from './StorylinePlotOverviewPanel.vue'
+import HolographicChroniclesPanel from './HolographicChroniclesPanel.vue'
 import ForeshadowLedgerPanel from './ForeshadowLedgerPanel.vue'
 import MacroRefactorPanel from './MacroRefactorPanel.vue'
 import SandboxDialoguePanel from './SandboxDialoguePanel.vue'
-import SnapshotPlaceholderPanel from './SnapshotPlaceholderPanel.vue'
 import ForeshadowChapterSuggestionsPanel from './ForeshadowChapterSuggestionsPanel.vue'
 
 /** 剧本基建组 */
 const FOUNDATION_TABS = new Set(['bible', 'worldbuilding', 'knowledge'])
-/** 叙事脉络组 */
-const NARRATIVE_TABS = new Set(['storylines', 'plot-arc', 'timeline', 'snapshots', 'macro-refactor'])
+/** 叙事脉络组（时间轴+快照已并入「全息编年史」；旧 tab id 见 LEGACY_NARRATIVE） */
+const NARRATIVE_TABS = new Set(['storyline-arc', 'chronicles', 'macro-refactor'])
+const LEGACY_NARRATIVE = new Set(['storylines', 'plot-arc', 'timeline', 'snapshots'])
 /** 片场（章节元素已移至中栏 Tab） */
 const TACTICAL_TABS = new Set(['sandbox', 'foreshadow-suggestions', 'foreshadow'])
 
 function resolveGroup(panel: string | undefined): 'foundation' | 'narrative' | 'tactical' {
   if (!panel) return 'foundation'
   if (TACTICAL_TABS.has(panel)) return 'tactical'
-  if (NARRATIVE_TABS.has(panel)) return 'narrative'
+  if (NARRATIVE_TABS.has(panel) || LEGACY_NARRATIVE.has(panel)) return 'narrative'
   return 'foundation'
+}
+
+function normalizeNarrativeTab(panel: string | undefined): string {
+  if (panel === 'storylines' || panel === 'plot-arc') return 'storyline-arc'
+  if (panel === 'timeline' || panel === 'snapshots') return 'chronicles'
+  if (panel && NARRATIVE_TABS.has(panel)) return panel
+  return 'storyline-arc'
 }
 
 interface Chapter {
@@ -134,26 +134,34 @@ const props = withDefaults(defineProps<Props>(), {
   currentChapter: null,
 })
 
+const emit = defineEmits<{
+  'update:currentPanel': [panel: string]
+}>()
+
 const activeGroup = ref<'foundation' | 'narrative' | 'tactical'>(resolveGroup(props.currentPanel))
 
 const foundationTab = ref(
   FOUNDATION_TABS.has(props.currentPanel ?? '') ? props.currentPanel! : 'bible'
 )
-const narrativeTab = ref(
-  NARRATIVE_TABS.has(props.currentPanel ?? '') ? props.currentPanel! : 'storylines'
-)
+const narrativeTab = ref(normalizeNarrativeTab(props.currentPanel))
 const tacticalTab = ref(
   TACTICAL_TABS.has(props.currentPanel ?? '') ? props.currentPanel! : 'sandbox'
 )
+
+function activePanelId(): string {
+  if (activeGroup.value === 'foundation') return foundationTab.value
+  if (activeGroup.value === 'narrative') return narrativeTab.value
+  return tacticalTab.value
+}
 
 watch(() => props.currentPanel, (newVal) => {
   if (!newVal) return
   if (TACTICAL_TABS.has(newVal)) {
     activeGroup.value = 'tactical'
     tacticalTab.value = newVal
-  } else if (NARRATIVE_TABS.has(newVal)) {
+  } else if (NARRATIVE_TABS.has(newVal) || LEGACY_NARRATIVE.has(newVal)) {
     activeGroup.value = 'narrative'
-    narrativeTab.value = newVal
+    narrativeTab.value = normalizeNarrativeTab(newVal)
   } else if (FOUNDATION_TABS.has(newVal)) {
     activeGroup.value = 'foundation'
     foundationTab.value = newVal
@@ -161,6 +169,11 @@ watch(() => props.currentPanel, (newVal) => {
     activeGroup.value = 'foundation'
     foundationTab.value = 'bible'
   }
+})
+
+/** 用户切换顶部三组或任一组内子 Tab 时，回写父级 rightPanel（保持与路由/程序化跳转一致） */
+watch([activeGroup, foundationTab, narrativeTab, tacticalTab], () => {
+  emit('update:currentPanel', activePanelId())
 })
 </script>
 
@@ -215,7 +228,6 @@ watch(() => props.currentPanel, (newVal) => {
   overflow: hidden;
 }
 
-/* Naive UI 动画容器，必须锁死不让溢出覆盖 tab 导航栏 */
 .settings-tabs :deep(.n-tabs-content-wrapper) {
   height: 100%;
   overflow: hidden;

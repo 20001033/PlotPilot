@@ -7,7 +7,7 @@
           <n-tag size="small" round :bordered="false">叙事事件</n-tag>
         </div>
         <p class="panel-lead">
-          管理故事<strong>世界内</strong>的时间流逝与事件顺序（叙事用）。<strong>不是</strong>「版本快照 / 回滚」——后者见叙事脉络中的<strong>版本快照</strong>。
+          垂直时间步进：<strong>世界内历法/相对时间</strong>与事件摘要。<strong>写</strong>：幕审计后可由后台 LLM 抽取流逝时间并追加；亦可手动维护。<strong>读</strong>：生成正文前注入上下文，避免时间线崩塌。
         </p>
       </div>
       <n-space class="header-actions" :size="8" align="center">
@@ -28,38 +28,25 @@
           </template>
         </n-empty>
 
-        <n-space v-else vertical :size="12">
-          <n-card
-            v-for="(event, index) in sortedEvents"
-            :key="index"
-            size="small"
-            :bordered="true"
-            hoverable
-          >
-            <template #header>
-              <div class="event-header">
-                <n-tag type="info" size="small" round>
-                  {{ event.time_point || '未指定时间' }}
-                </n-tag>
-                <n-text strong>{{ event.event }}</n-text>
-              </div>
-            </template>
-
-            <n-space vertical :size="8">
-              <div v-if="event.description" class="info-row">
-                <n-text depth="3">描述:</n-text>
-                <n-text>{{ event.description }}</n-text>
-              </div>
-            </n-space>
-
-            <template #action>
-              <n-space :size="8">
+        <div v-else class="timeline-stepper">
+          <n-timeline>
+            <n-timeline-item
+              v-for="(event, index) in sortedEvents"
+              :key="event.id || index"
+              type="info"
+              :title="event.event"
+              :time="event.time_point || '未指定时间'"
+            >
+              <n-text v-if="event.description" depth="3" style="font-size: 12px; line-height: 1.5">
+                {{ event.description }}
+              </n-text>
+              <n-space :size="6" style="margin-top: 8px">
                 <n-button size="tiny" secondary @click="editEvent(index)">编辑</n-button>
                 <n-button size="tiny" type="error" secondary @click="deleteEvent(index)">删除</n-button>
               </n-space>
-            </template>
-          </n-card>
-        </n-space>
+            </n-timeline-item>
+          </n-timeline>
+        </div>
       </n-spin>
     </div>
 
@@ -276,5 +263,9 @@ onMounted(() => {
   justify-content: space-between;
   align-items: flex-start;
   gap: 8px;
+}
+
+.timeline-stepper {
+  padding: 4px 4px 12px;
 }
 </style>

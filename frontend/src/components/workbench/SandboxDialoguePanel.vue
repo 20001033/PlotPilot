@@ -1,6 +1,63 @@
 <template>
   <div class="sandbox-panel">
     <n-space vertical :size="12">
+      <n-alert type="info" :show-icon="true" style="font-size: 12px">
+        <strong>写</strong>：挂起或审计时可改锚点字段；<strong>读</strong>：生成正文节拍时作为高优先级 System 提示注入声线与小动作。
+      </n-alert>
+
+      <!-- 角色锚点 + 试生成 -->
+      <n-card title="角色锚点 · 试生成对话" size="small" :bordered="true">
+        <n-space vertical :size="10">
+          <n-space :size="8" wrap align="center">
+            <n-select
+              v-model:value="selectedCharacterId"
+              :options="characterOptions"
+              placeholder="选择 Bible 角色"
+              filterable
+              clearable
+              style="min-width: 180px"
+              size="small"
+            />
+            <n-button size="small" secondary :loading="anchorLoading" :disabled="!selectedCharacterId" @click="loadAnchor">
+              载入锚点
+            </n-button>
+          </n-space>
+
+          <template v-if="anchor">
+            <n-form-item label="心理状态" label-placement="top" :show-feedback="false">
+              <n-input v-model:value="editMental" size="small" placeholder="如：心理受创、亢奋" />
+            </n-form-item>
+            <n-form-item label="口头禅" label-placement="top" :show-feedback="false">
+              <n-input v-model:value="editVerbal" size="small" />
+            </n-form-item>
+            <n-form-item label="待机动作" label-placement="top" :show-feedback="false">
+              <n-input v-model:value="editIdle" size="small" placeholder="如：摸剑柄、转笔" />
+            </n-form-item>
+            <n-form-item label="场景提示" label-placement="top" :show-feedback="false">
+              <n-input
+                v-model:value="scenePrompt"
+                type="textarea"
+                size="small"
+                placeholder="写一句场面/冲突，测试声线"
+                :autosize="{ minRows: 2, maxRows: 5 }"
+              />
+            </n-form-item>
+            <n-button
+              type="primary"
+              size="small"
+              :loading="genLoading"
+              :disabled="!scenePrompt.trim()"
+              @click="runGenerate"
+            >
+              生成对话
+            </n-button>
+            <n-card v-if="generatedLine" size="small" :bordered="true" title="输出">
+              <n-text style="font-size: 13px; line-height: 1.6">{{ generatedLine }}</n-text>
+            </n-card>
+          </template>
+        </n-space>
+      </n-card>
+
       <!-- 筛选区 -->
       <n-card title="对话白名单筛选" size="small" :bordered="false">
         <n-space vertical :size="8">
@@ -83,10 +140,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useMessage } from 'naive-ui'
 import { sandboxApi } from '../../api/sandbox'
-import type { DialogueWhitelistResponse, DialogueEntry } from '../../api/sandbox'
+import type { DialogueWhitelistResponse, DialogueEntry, CharacterAnchor } from '../../api/sandbox'
+import { bibleApi } from '../../api/bible'
+import type { CharacterDTO } from '../../api/bible'
 
 const props = defineProps<{ slug: string }>()
 const message = useMessage()
@@ -96,6 +155,85 @@ const result = ref<DialogueWhitelistResponse | null>(null)
 const filterChapter = ref<number | null>(null)
 const filterSpeaker = ref('')
 const searchText = ref('')
+
+const characters = ref<CharacterDTO[]>([])
+const selectedCharacterId = ref<string | null>(null)
+const anchor = ref<CharacterAnchor | null>(null)
+const anchorLoading = ref(false)
+const genLoading = ref(false)
+const editMental = ref('')
+const editVerbal = ref('')
+const editIdle = ref('')
+const scenePrompt = ref('')
+const generatedLine = ref('')
+
+const characterOptions = computed(() =>
+  characters.value.map(c => ({ label: c.name || c.id, value: c.id }))
+)
+
+async function loadCharacters() {
+  try {
+    characters.value = await bibleApi.listCharacters(props.slug)
+  } catch {
+    characters.value = []
+  }
+}
+
+async function loadAnchor() {
+  const id = selectedCharacterId.value
+  if (!id) return
+  anchorLoading.value = true
+  try {
+    const a = await sandboxApi.getCharacterAnchor(props.slug, id)
+    anchor.value = a
+    editMental.value = a.mental_state || ''
+    editVerbal.value = a.verbal_tic || ''
+    editIdle.value = a.idle_behavior || ''
+    generatedLine.value = ''
+  } catch {
+    message.error('载入锚点失败（需 Bible 中存在该角色）')
+    anchor.value = null
+  } finally {
+    anchorLoading.value = false
+  }
+}
+
+async function runGenerate() {
+  const id = selectedCharacterId.value
+  if (!id || !scenePrompt.value.trim()) return
+  genLoading.value = true
+  generatedLine.value = ''
+  try {
+    const res = await sandboxApi.generateDialogue({
+      novel_id: props.slug,
+      character_id: id,
+      scene_prompt: scenePrompt.value.trim(),
+      mental_state: editMental.value || undefined,
+      verbal_tic: editVerbal.value || undefined,
+    })
+    generatedLine.value = res.dialogue
+  } catch {
+    message.error('生成失败')
+  } finally {
+    genLoading.value = false
+  }
+}
+
+watch(selectedCharacterId, () => {
+  anchor.value = null
+  generatedLine.value = ''
+})
+
+watch(
+  () => props.slug,
+  () => {
+    void loadCharacters()
+    anchor.value = null
+    generatedLine.value = ''
+  }
+)
+
+onMounted(() => void loadCharacters())
 
 const filteredDialogues = computed<DialogueEntry[]>(() => {
   if (!result.value) return []

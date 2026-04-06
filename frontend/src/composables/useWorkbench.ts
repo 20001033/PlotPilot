@@ -46,7 +46,7 @@ export function useWorkbench(options: UseWorkbenchOptions) {
   const chapterContent = ref('')
   const chapterLoading = ref(false)
 
-  /** 右栏子面板 id，与 SettingsPanel 中 codex / tactical 的 tab name 一致 */
+  /** 右栏子面板 id，与 SettingsPanel 中 foundation / narrative / tactical 的 tab name 一致 */
   const rightPanel = ref<string>('bible')
   const biblePanelKey = ref(0)
   const currentJobId = ref<string | null>(null)

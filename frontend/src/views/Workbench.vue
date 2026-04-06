@@ -40,6 +40,7 @@
                   :current-panel="rightPanel"
                   :bible-key="biblePanelKey"
                   :current-chapter="currentChapter"
+                  @update:current-panel="onSettingsPanelChange"
                 />
               </template>
             </n-split>
@@ -121,6 +122,10 @@ const currentChapter = computed(() => {
   if (!currentChapterId.value) return null
   return chapters.value.find(ch => ch.id === currentChapterId.value) || null
 })
+
+function onSettingsPanelChange(panel: string) {
+  rightPanel.value = panel
+}
 
 function parseChapterQuery(q: unknown): number | null {
   if (q == null || q === '') return null

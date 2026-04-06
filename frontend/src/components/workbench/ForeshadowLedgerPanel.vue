@@ -10,7 +10,7 @@
           <n-tag size="small" round :bordered="false">Foreshadow Ledger</n-tag>
         </div>
         <p class="panel-lead">
-          管理已埋下但<strong>尚未兑现的伏笔</strong>，生成时 AI 会优先在上下文中呼应这些线索。
+          <strong>写</strong>：人工埋设或章后 NLP 异步入库；<strong>读</strong>：供「本章建议」向量/启发式检索与上下文全局池，监控大盘统计回收率。
         </p>
       </div>
       <n-space class="header-actions" :size="8" align="center">

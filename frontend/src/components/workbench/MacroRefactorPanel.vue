@@ -7,10 +7,14 @@
           <n-tag size="small" round :bordered="false">Macro</n-tag>
         </div>
         <p class="panel-lead">
-          当前为<strong>人设冲突断点扫描</strong>与重构提案。未来可在本入口下并入「全书逻辑审计」等子能力，无需再拆一级 Tab。
+          Map-Reduce 式长文本理解入口：<strong>写</strong>仅在卷/部完成或人工触发时将提案写入 RefactorProposals；<strong>读</strong>在作者采纳后变为「补丁」，影响后续生成与对话中的自洽修补。
         </p>
       </div>
     </header>
+
+    <n-alert type="default" :show-icon="true" style="margin: 0 16px 12px; font-size: 12px">
+      当前 Step1–2 为人设冲突断点 + 提案；全书剧情 Bug 扫描可在同一弹层内扩展为左侧列表、右侧修复稿形态。
+    </n-alert>
 
     <!-- Step 1：扫描断点 -->
     <div class="step-block">
