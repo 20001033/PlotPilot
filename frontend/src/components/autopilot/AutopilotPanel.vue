@@ -122,6 +122,8 @@ const showStartModal = ref(false)
 const startConfig = ref({ max_auto_chapters: 50 })
 /** HTTP/1.1 下同域长连接约 6 路；避免与日志 /stream 双开占满导致其它 API 挂起 */
 let statusPollTimer = null
+/** novel_id 在库中不存在(404)时不再轮询，避免旧标签页/错 slug 刷屏访问日志 */
+const statusPollDisabled = ref(false)
 
 // 计算属性
 const isRunning  = computed(() => status.value?.autopilot_status === 'running')
@@ -199,6 +201,12 @@ const base = () => `/api/v1/autopilot/${props.novelId}`
 
 async function fetchStatus() {
   const res = await fetch(`${base()}/status`)
+  if (res.status === 404) {
+    clearStatusPoll()
+    status.value = null
+    statusPollDisabled.value = true
+    return
+  }
   if (res.ok) {
     status.value = await res.json()
     emit('status-change', status.value)
@@ -216,11 +224,19 @@ watch(
   () => [isRunning.value, needsReview.value],
   ([running, review]) => {
     clearStatusPoll()
+    if (statusPollDisabled.value) return
     if (running || review) {
       statusPollTimer = setInterval(() => fetchStatus(), 3000)
     }
   },
   { immediate: true }
+)
+
+watch(
+  () => props.novelId,
+  () => {
+    statusPollDisabled.value = false
+  }
 )
 
 function openStartModal() { showStartModal.value = true }

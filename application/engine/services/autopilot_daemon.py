@@ -10,6 +10,7 @@
 import time
 import logging
 import asyncio
+import sqlite3
 from typing import Any, Dict, List, Optional
 
 from domain.novel.entities.novel import Novel, NovelStage, AutopilotStatus
@@ -98,16 +99,48 @@ class AutopilotDaemon:
         """获取所有活跃小说（快速只读）"""
         return self.novel_repository.find_by_autopilot_status(AutopilotStatus.RUNNING.value)
 
+    def _read_autopilot_status_ephemeral(self, novel_id: NovelId) -> Optional[AutopilotStatus]:
+        """用独立 SQLite 连接读 autopilot_status。
+
+        主仓储连接在 asyncio 与 asyncio.to_thread、或后台线程里并发用时，同一 sqlite3 连接
+        跨线程未定义行为，且长连接可能看不到他处已提交的 STOPPED。短连接每次打开可读 WAL 最新提交。
+        """
+        from application.paths import get_db_path
+
+        path = get_db_path()
+        conn = sqlite3.connect(path, timeout=10.0)
+        try:
+            conn.row_factory = sqlite3.Row
+            cur = conn.execute(
+                "SELECT autopilot_status FROM novels WHERE id = ?",
+                (novel_id.value,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            raw = row["autopilot_status"]
+            try:
+                return AutopilotStatus(raw)
+            except ValueError:
+                return AutopilotStatus.STOPPED
+        finally:
+            conn.close()
+
     def _merge_autopilot_status_from_db(self, novel: Novel) -> None:
         """用户点「停止」只改 DB；写库前必须合并，否则会覆盖 STOPPED。"""
-        fresh = self.novel_repository.get_by_id(novel.novel_id)
-        if fresh:
-            novel.autopilot_status = fresh.autopilot_status
+        status = self._read_autopilot_status_ephemeral(novel.novel_id)
+        if status is not None:
+            novel.autopilot_status = status
 
     def _is_still_running(self, novel: Novel) -> bool:
         """从 DB 同步自动驾驶状态；非 RUNNING 时应立即结束本段处理。"""
         self._merge_autopilot_status_from_db(novel)
         return novel.autopilot_status == AutopilotStatus.RUNNING
+
+    def _novel_is_running_in_db(self, novel_id: NovelId) -> bool:
+        """流式轮询用：不修改内存 novel；独立连接读是否仍为 RUNNING。"""
+        status = self._read_autopilot_status_ephemeral(novel_id)
+        return status == AutopilotStatus.RUNNING
 
     def _flush_novel(self, novel: Novel) -> None:
         """关键阶段立即写库，避免下一轮轮询仍读到旧 stage（重复幕级规划 / 重复日志）。"""
@@ -432,10 +465,18 @@ class AutopilotDaemon:
             except Exception as e:
                 logger.warning(f"ContextBuilder 失败，降级：{e}")
 
+        if not self._is_still_running(novel):
+            logger.info(f"[{novel.novel_id}] 用户已停止（上下文组装后）")
+            return
+
         # 5. 节拍放大
         beats = []
         if self.context_builder:
             beats = self.context_builder.magnify_outline_to_beats(outline, target_chapter_words=2500)
+
+        if not self._is_still_running(novel):
+            logger.info(f"[{novel.novel_id}] 用户已停止（节拍拆分后）")
+            return
 
         # 6. 🔑 节拍级幂等生成 + 增量落库
         start_beat = novel.current_beat_index or 0  # 断点续写：从上次中断的节拍继续
@@ -619,15 +660,42 @@ class AutopilotDaemon:
         config = GenerationConfig(max_tokens=max_tokens, temperature=0.85)
 
         content = ""
-        chunk_n = 0
-        async for chunk in self.llm_service.stream_generate(prompt, config):
-            content += chunk
-            chunk_n += 1
-            if novel and chunk_n % 10 == 0:
-                if not self._is_still_running(novel):
-                    nid = getattr(novel.novel_id, "value", novel.novel_id)
-                    logger.info(f"[{nid}] 流式生成中检测到停止，截断当前输出")
+        stop_detected = asyncio.Event()
+        watch_task = None
+        nid = getattr(novel.novel_id, "value", novel.novel_id) if novel else None
+
+        if novel is not None:
+            novel_id_ref = novel.novel_id
+
+            async def _watch_stop_from_db() -> None:
+                """与 stream_generate 并行：不依赖 chunk 频率，首 token 慢时也能尽快停。"""
+                while not stop_detected.is_set():
+                    await asyncio.sleep(0.35)
+                    if not self._novel_is_running_in_db(novel_id_ref):
+                        logger.info(f"[{nid}] 后台轮询：DB 已为停止，结束流式")
+                        stop_detected.set()
+                        return
+
+            watch_task = asyncio.create_task(_watch_stop_from_db())
+
+        try:
+            async for chunk in self.llm_service.stream_generate(prompt, config):
+                if novel is not None and stop_detected.is_set():
                     break
+                content += chunk
+                if novel is not None and stop_detected.is_set():
+                    break
+        finally:
+            stop_detected.set()
+            if watch_task is not None:
+                watch_task.cancel()
+                try:
+                    await watch_task
+                except asyncio.CancelledError:
+                    pass
+
+        if novel is not None:
+            self._merge_autopilot_status_from_db(novel)
 
         return content
 

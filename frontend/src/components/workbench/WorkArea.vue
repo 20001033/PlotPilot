@@ -534,13 +534,6 @@ function maybeEmitDeskRefresh(status: Record<string, unknown> | null | undefined
   emit('chapterUpdated')
 }
 
-watch(
-  () => props.slug,
-  () => {
-    lastAutopilotDeskSnap.value = null
-  }
-)
-
 const handleAutopilotStatusChange = (status: any) => {
   autopilotStatus.value = status
   maybeEmitDeskRefresh(status)
@@ -548,6 +541,8 @@ const handleAutopilotStatusChange = (status: any) => {
 
 /** 辅助撰稿下不挂载驾驶舱，需独立轮询托管状态以支持「运行中只读」 */
 let assistedAutopilotPollTimer: ReturnType<typeof setInterval> | null = null
+/** 该书在库中不存在(404)时不再轮询 /autopilot/.../status */
+let assistedAutopilot404 = false
 
 function clearAssistedAutopilotPoll() {
   if (assistedAutopilotPollTimer != null) {
@@ -557,8 +552,14 @@ function clearAssistedAutopilotPoll() {
 }
 
 async function pollAutopilotStatusWhileAssisted() {
+  if (assistedAutopilot404) return
   try {
     const res = await fetch(`/api/v1/autopilot/${props.slug}/status`)
+    if (res.status === 404) {
+      assistedAutopilot404 = true
+      clearAssistedAutopilotPoll()
+      return
+    }
     if (res.ok) {
       const json = await res.json()
       autopilotStatus.value = json
@@ -568,6 +569,22 @@ async function pollAutopilotStatusWhileAssisted() {
     /* 忽略 */
   }
 }
+
+watch(
+  () => props.slug,
+  () => {
+    lastAutopilotDeskSnap.value = null
+    assistedAutopilot404 = false
+    if (workMode.value === 'assisted') {
+      clearAssistedAutopilotPoll()
+      void pollAutopilotStatusWhileAssisted()
+      assistedAutopilotPollTimer = setInterval(
+        () => void pollAutopilotStatusWhileAssisted(),
+        4000
+      )
+    }
+  }
+)
 
 watch(
   () => workMode.value,

@@ -28,8 +28,13 @@ from application.blueprint.services.continuous_planning_service import Continuou
 
 # 复用 API 层的工厂函数，保证与 FastAPI 层使用同一套配置
 from interfaces.api.dependencies import (
-    get_llm_service, get_context_builder, get_bible_service,
-    get_foreshadowing_repository, get_novel_repository, get_chapter_repository,
+    get_llm_service,
+    get_context_builder,
+    get_bible_service,
+    get_foreshadowing_repository,
+    get_novel_repository,
+    get_chapter_repository,
+    get_voice_drift_service,
 )
 from interfaces.api.middleware.logging_config import setup_logging
 
@@ -63,19 +68,11 @@ def build_daemon() -> AutopilotDaemon:
         chapter_repository=chapter_repo,
     )
 
-    # VoiceDriftService（可选，失败则跳过）
-    # score_repo 须为 chapter_style_scores 表（upsert），与 interfaces.api.dependencies.get_voice_drift_service 一致
+    # VoiceDriftService：与 FastAPI get_voice_drift_service() 同源（chapter_style_scores.upsert，勿用 VoiceVault）
     voice_drift_service = None
     try:
-        from infrastructure.persistence.database.sqlite_chapter_style_score_repository import (
-            SqliteChapterStyleScoreRepository,
-        )
-        from infrastructure.persistence.database.sqlite_voice_fingerprint_repository import SQLiteVoiceFingerprintRepository
-        from application.analyst.services.voice_drift_service import VoiceDriftService
-        score_repo = SqliteChapterStyleScoreRepository(db)
-        fingerprint_repo = SQLiteVoiceFingerprintRepository(db)
-        voice_drift_service = VoiceDriftService(score_repo, fingerprint_repo)
-        logger.info("VoiceDriftService 已启用")
+        voice_drift_service = get_voice_drift_service()
+        logger.info("VoiceDriftService 已启用（与 API 同源注入）")
     except Exception as e:
         logger.warning(f"VoiceDriftService 初始化失败，文风检测已禁用：{e}")
 

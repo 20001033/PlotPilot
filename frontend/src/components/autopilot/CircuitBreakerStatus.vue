@@ -156,6 +156,8 @@ const showHistoryModal = ref(false)
 const loading = ref(false)
 
 let pollTimer: number | null = null
+/** 该书在库中不存在(404)时不再轮询，避免旧标签页刷屏 */
+let pollStopped404 = false
 
 // 状态
 const status = computed(() => breakerData.value.status)
@@ -229,6 +231,11 @@ async function loadBreakerData() {
   loading.value = true
   try {
     const res = await fetch(`/api/v1/autopilot/${props.novelId}/circuit-breaker`)
+    if (res.status === 404) {
+      stopPolling()
+      pollStopped404 = true
+      return
+    }
     if (res.ok) {
       const data = await res.json()
       const prevStatus = breakerData.value.status
@@ -286,11 +293,14 @@ function formatTime(timestamp: string): string {
   }
 }
 
-// 定时轮询（每 10 秒）
-function startPolling() {
-  loadBreakerData()
+// 定时轮询（每 10 秒）；先等首包再挂 interval，避免 404 后仍启动定时器
+async function startPolling() {
+  stopPolling()
+  pollStopped404 = false
+  await loadBreakerData()
+  if (pollStopped404) return
   pollTimer = window.setInterval(() => {
-    loadBreakerData()
+    void loadBreakerData()
   }, 10000)
 }
 
@@ -303,13 +313,12 @@ function stopPolling() {
 
 // 监听
 watch(() => props.novelId, () => {
-  stopPolling()
-  startPolling()
+  void startPolling()
 })
 
 // 生命周期
 onMounted(() => {
-  startPolling()
+  void startPolling()
 })
 
 onUnmounted(() => {

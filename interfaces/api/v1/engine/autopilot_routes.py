@@ -120,6 +120,7 @@ async def stop_autopilot(novel_id: str):
         raise HTTPException(404, "小说不存在")
     novel.autopilot_status = AutopilotStatus.STOPPED
     repo.save(novel)
+    logger.info("autopilot stop: novel_id=%s committed STOPPED", novel_id)
     return {"success": True, "message": "自动驾驶已停止"}
 
 
