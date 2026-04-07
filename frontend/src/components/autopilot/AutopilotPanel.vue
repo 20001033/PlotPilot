@@ -421,11 +421,8 @@ function startChapterStream() {
   writingChapterNumber.value = 0
   writingBeatIndex.value = 0
 
-  console.log('[AutopilotPanel] Starting chapter stream for novel:', props.novelId)
-  
   chapterStreamCtrl = subscribeChapterStream(props.novelId, {
     onChapterStart: (num) => {
-      console.log('[AutopilotPanel] Chapter started:', num)
       writingChapterNumber.value = num
       writingContent.value = ''
       writingBeatIndex.value = 0
@@ -433,27 +430,25 @@ function startChapterStream() {
     },
     onChapterChunk: (chunk, beatIndex) => {
       // 真正的流式：增量追加文字
-      console.log('[AutopilotPanel] Received chunk:', chunk.length, 'chars, beatIndex:', beatIndex)
       writingContent.value += chunk
       writingBeatIndex.value = beatIndex
       emit('chapter-chunk', { chunk, beatIndex, content: writingContent.value })
     },
     onChapterContent: (data) => {
       // 向后兼容：完整内容
-      console.log('[AutopilotPanel] Received content:', data.content.length, 'chars')
       writingContent.value = data.content
       writingChapterNumber.value = data.chapterNumber
       writingBeatIndex.value = data.beatIndex
       emit('chapter-content-update', data)
     },
     onConnected: () => {
-      console.log('[AutopilotPanel] Chapter stream connected')
+      // SSE连接成功
     },
     onDisconnected: () => {
-      console.log('[AutopilotPanel] Chapter stream disconnected')
+      // SSE连接断开
     },
     onError: (err) => {
-      console.error('[AutopilotPanel] Chapter stream error:', err)
+      console.error('Chapter stream error:', err)
     }
   })
 }
