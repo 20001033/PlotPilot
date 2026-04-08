@@ -1,11 +1,16 @@
 """Anthropic LLM 提供商实现"""
+import json
+import logging
 from typing import AsyncIterator
+import httpx
 from anthropic import Anthropic, AsyncAnthropic
 from domain.ai.value_objects.prompt import Prompt
 from domain.ai.value_objects.token_usage import TokenUsage
 from domain.ai.services.llm_service import GenerationConfig, GenerationResult
 from infrastructure.ai.config.settings import Settings
 from .base import BaseProvider
+
+logger = logging.getLogger(__name__)
 
 
 class AnthropicProvider(BaseProvider):
@@ -90,17 +95,77 @@ class AnthropicProvider(BaseProvider):
         prompt: Prompt,
         config: GenerationConfig
     ) -> AsyncIterator[str]:
-        """流式生成内容（Anthropic Messages streaming API）。"""
+        """流式生成内容。
+
+        直接使用 httpx 解析 SSE 流，绕过 anthropic SDK 的兼容性问题。
+        """
+        base_url = self.settings.base_url or "https://api.anthropic.com"
+        url = f"{base_url}/v1/messages"
+
+        headers = {
+            "x-api-key": self.settings.api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        }
+
+        payload = {
+            "model": config.model,
+            "max_tokens": config.max_tokens,
+            "temperature": config.temperature,
+            "system": prompt.system,
+            "messages": [{"role": "user", "content": prompt.user}],
+            "stream": True,
+        }
+
+        logger.debug(f"[Stream] Calling {url}")
+
         try:
-            async with self.async_client.messages.stream(
-                model=config.model,
-                temperature=config.temperature,
-                max_tokens=config.max_tokens,
-                system=prompt.system,
-                messages=[{"role": "user", "content": prompt.user}],
-            ) as stream:
-                async for text in stream.text_stream:
-                    if text:
-                        yield text
+            async with httpx.AsyncClient(timeout=300.0) as client:
+                async with client.stream("POST", url, headers=headers, json=payload) as response:
+                    if response.status_code != 200:
+                        error_body = await response.aread()
+                        raise RuntimeError(f"API error {response.status_code}: {error_body.decode()}")
+
+                    buffer = ""
+                    async for chunk in response.aiter_text():
+                        buffer += chunk
+
+                        # 解析 SSE 事件
+                        while "\n\n" in buffer:
+                            event_text, buffer = buffer.split("\n\n", 1)
+                            text_content = self._parse_sse_event(event_text)
+                            if text_content:
+                                yield text_content
+
         except Exception as e:
+            logger.error(f"[Stream] Failed: {e}")
             raise RuntimeError(f"Failed to stream text: {str(e)}") from e
+
+    def _parse_sse_event(self, event_text: str) -> str:
+        """解析单个 SSE 事件，返回文本内容（如果有）。"""
+        lines = event_text.strip().split("\n")
+        event_type = None
+        data = None
+
+        for line in lines:
+            if line.startswith("event:"):
+                event_type = line[6:].strip()
+            elif line.startswith("data:"):
+                data = line[5:].strip()
+
+        if not data:
+            return ""
+
+        try:
+            parsed = json.loads(data)
+        except json.JSONDecodeError:
+            return ""
+
+        # 只处理 content_block_delta 事件
+        if parsed.get("type") == "content_block_delta":
+            delta = parsed.get("delta", {})
+            if delta.get("type") == "text_delta":
+                return delta.get("text", "")
+
+        return ""
